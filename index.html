@@ -118,9 +118,17 @@
   <section id="section-output" class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 hidden">
     <div class="flex items-center justify-between mb-4">
       <h2 class="font-bold">4. Notificación</h2>
-      <button id="btn-save-case" class="btn btn-secondary">💾 Guardar caso</button>
+      <span id="rules-badge" class="pill bg-indigo-100 text-indigo-800 hidden"></span>
     </div>
     <div id="output-container" class="space-y-4"></div>
+    <div class="mt-6 border-t pt-4">
+      <label class="field-label">📝 Regla para la próxima vez <span class="text-slate-400 text-[10px] normal-case">(opcional — si hay algo que Gemini debería recordar para casos similares)</span></label>
+      <textarea id="f-rule-note" class="input" rows="2" placeholder='Ej: "Si la empresa aparece como RUTA 3, el nombre completo es RUTA 3 AUTOMOTORES S.A." o "Para SMATA siempre incluir a sindical@smata.org"'></textarea>
+      <div class="flex items-center justify-between mt-2">
+        <span id="diff-summary" class="text-xs text-slate-500"></span>
+        <button id="btn-save-case" class="btn btn-primary">💾 Guardar caso y aprender</button>
+      </div>
+    </div>
   </section>
 </div>
 
@@ -128,6 +136,11 @@
   <div class="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto p-6">
     <div class="flex justify-between items-center mb-4"><h3 class="text-xl font-bold">Configuración</h3><button class="modal-close text-slate-400 text-2xl">×</button></div>
     <div class="space-y-6">
+      <div>
+        <h4 class="font-bold mb-2">📚 Reglas aprendidas <span id="rules-count" class="text-xs font-normal text-slate-500"></span></h4>
+        <p class="text-xs text-slate-500 mb-2">Se inyectan automáticamente en cada análisis de PDFs. Borrá las que ya no apliquen.</p>
+        <div id="rules-list" class="space-y-2 max-h-80 overflow-y-auto"></div>
+      </div>
       <div>
         <h4 class="font-bold mb-2">Sindicatos</h4>
         <div id="sind-list" class="space-y-1 max-h-64 overflow-y-auto border rounded p-2 mb-2 text-sm"></div>
@@ -209,7 +222,9 @@ const MESES_MAP = {enero:1,febrero:2,marzo:3,abril:4,mayo:5,junio:6,julio:7,agos
 const state = {
   data: { ex:'',pv:'',if_:'',re:'',resol:'',sigla:'',sindicato:'',empresas:[],dia:'',fecha:'',mes:'',anio:'',hora:'',meet:'',fecha_acta:'',mismo_dia:true,scenario:'' },
   emails_sind: [], emails_emp: [],
-  notification: { asunto:'',cuerpo:'',interno:'',no_notifica:false }
+  notification: { asunto:'',cuerpo:'',interno:'',no_notifica:false },
+  _original: null,
+  _activeRules: 0
 };
 const $ = id => document.getElementById(id);
 
@@ -234,7 +249,8 @@ async function handleFiles(fileList) {
     const pdfs = [];
     for (const f of files) pdfs.push({ name: f.name, data: await fileToBase64(f) });
     $('loading-msg').textContent = 'Procesando con IA (15-30s)…';
-    const r = await fetch('/api/notify', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ pdfs, sindicatos: SIND_DICT }) });
+    const rules = await fetchActiveRules();
+    const r = await fetch('/api/notify', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ pdfs, sindicatos: SIND_DICT, rules }) });
     const result = await r.json();
     if (!r.ok) throw new Error(result.error || 'Error en /api/notify');
     applyResult(result);
@@ -252,6 +268,10 @@ function applyResult(result) {
   } else $('section-warnings').classList.add('hidden');
 
   const ex = result.extracted || {};
+  state._original = {
+    scenario: result.scenario || '',
+    extracted: JSON.parse(JSON.stringify(ex))
+  };
   Object.assign(state.data, {
     ex:ex.ex||'',pv:ex.pv||'',if_:ex.if_||'',re:ex.re||'',resol:ex.resol||'',
     sigla:ex.sigla||'',sindicato:ex.sindicato||'',empresas:ex.empresas||[],
@@ -502,9 +522,60 @@ $('btn-add-emp').onclick = () => {
   $(id).addEventListener('keydown', e => { if(e.key==='Enter'){e.preventDefault();$(id==='email-sindicato-new'?'btn-add-sind':'btn-add-emp').click();} });
 });
 
+function computeDiff() {
+  if (!state._original) return { scenario_fix: null, field_fixes: {} };
+  const orig = state._original;
+  const curr = state.data;
+  const diff = { scenario_fix: null, field_fixes: {} };
+  if (orig.scenario && orig.scenario !== curr.scenario) {
+    diff.scenario_fix = { wrong: orig.scenario, correct: curr.scenario, context: `sigla=${curr.sigla}, empresa="${curr.empresas[0]||''}"` };
+  }
+  const fields = ['sigla','sindicato','empresas','fecha_acta','meet','mismo_dia'];
+  for (const f of fields) {
+    const a = JSON.stringify(orig.extracted?.[f] ?? '');
+    const b = JSON.stringify(f==='if_' ? curr.if_ : curr[f] ?? '');
+    if (a !== b && a !== '""' && a !== 'null') {
+      diff.field_fixes[f] = { wrong: orig.extracted?.[f], correct: f==='if_' ? curr.if_ : curr[f] };
+    }
+  }
+  return diff;
+}
+
+function updateDiffSummary() {
+  const diff = computeDiff();
+  const changes = [];
+  if (diff.scenario_fix) changes.push(`escenario: ${diff.scenario_fix.wrong} → ${diff.scenario_fix.correct}`);
+  const n = Object.keys(diff.field_fixes).length;
+  if (n > 0) changes.push(`${n} campo${n>1?'s':''} corregido${n>1?'s':''}`);
+  const note = $('f-rule-note').value.trim();
+  const el = $('diff-summary');
+  if (changes.length > 0 || note) {
+    el.textContent = `🎓 Se guardará como regla: ${changes.join(' · ')}${note?' + nota':''}`;
+    el.className = 'text-xs text-indigo-700 font-medium';
+  } else {
+    el.textContent = 'Sin correcciones detectadas (solo se guarda el caso)';
+    el.className = 'text-xs text-slate-500';
+  }
+}
+
+async function fetchActiveRules() {
+  const items = await kbList('rule:');
+  const rules = items.slice(0, 50).map(it => it.value).filter(Boolean);
+  state._activeRules = rules.length;
+  const badge = $('rules-badge');
+  if (rules.length > 0) {
+    badge.textContent = `📚 ${rules.length} regla${rules.length>1?'s':''} aprendida${rules.length>1?'s':''}`;
+    badge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+  }
+  return rules;
+}
+
 $('btn-save-case').onclick = async () => {
   readForm();
   if (!state.data.ex) return alert('Falta EX');
+
   await kbSet(`email:${state.data.ex}`, { sindicato: state.emails_sind, empresa: state.emails_emp });
   if (state.data.sigla && state.emails_sind.length > 0) {
     const ex = (await kbGet(`email:_g_${state.data.sigla}`)) || [];
@@ -515,12 +586,73 @@ $('btn-save-case').onclick = async () => {
     SIND_DICT[state.data.sigla] = state.data.sindicato;
     await kbSet('sindicatos', SIND_DICT);
   }
+
+  const diff = computeDiff();
+  const note = $('f-rule-note').value.trim();
+  const hasScenarioFix = !!diff.scenario_fix;
+  const hasFieldFix = Object.keys(diff.field_fixes).length > 0;
+  let ruleSaved = false;
+  if (hasScenarioFix || hasFieldFix || note) {
+    const rule = {
+      ts: new Date().toISOString(),
+      scenario_fix: diff.scenario_fix,
+      field_fixes: diff.field_fixes,
+      note: note,
+      context: { ex: state.data.ex, sigla: state.data.sigla, empresa: state.data.empresas[0] || '' }
+    };
+    await kbSet(`rule:${Date.now()}`, rule);
+    ruleSaved = true;
+  }
+
   await kbSet(`history:${state.data.ex}:${Date.now()}`, { scenario: state.data.scenario, data: state.data, emails_sind: state.emails_sind, emails_emp: state.emails_emp, notification: state.notification, ts: new Date().toISOString() });
-  flash('✓ Guardado');
+
+  $('f-rule-note').value = '';
+  await fetchActiveRules();
+  flash(ruleSaved ? '✓ Guardado + regla aprendida' : '✓ Guardado');
 };
+
+['f-scenario','f-sigla','f-sindicato','f-empresas','f-fecha-acta','f-meet','f-mismodia','f-rule-note'].forEach(id => {
+  document.addEventListener('input', e => { if (e.target.id === id) updateDiffSummary(); });
+});
 function flash(msg) { const s = $('sb-status'), o = s.textContent, c = s.className; s.textContent = msg; s.className = 'pill bg-emerald-100 text-emerald-800'; setTimeout(() => { s.textContent = o; s.className = c; }, 2000); }
 
-$('btn-config').onclick = () => { renderSindList(); renderBlacklist(); $('modal-config').classList.remove('hidden'); };
+$('btn-config').onclick = () => { renderSindList(); renderBlacklist(); renderRulesList(); $('modal-config').classList.remove('hidden'); };
+
+async function renderRulesList() {
+  const items = await kbList('rule:');
+  $('rules-count').textContent = `(${items.length})`;
+  if (items.length === 0) {
+    $('rules-list').innerHTML = '<p class="text-slate-400 text-sm italic">Todavía no guardaste reglas. Cuando corrijas un caso y le des "Guardar", se aprenderá acá.</p>';
+    return;
+  }
+  $('rules-list').innerHTML = items.map(it => {
+    const r = it.value || {};
+    const parts = [];
+    if (r.scenario_fix) parts.push(`<div><span class="font-semibold text-indigo-700">Escenario:</span> <span class="line-through text-red-500">${r.scenario_fix.wrong}</span> → <span class="text-emerald-700">${r.scenario_fix.correct}</span></div>`);
+    if (r.field_fixes) {
+      for (const [f, fix] of Object.entries(r.field_fixes)) {
+        parts.push(`<div><span class="font-semibold text-indigo-700">${f}:</span> <span class="line-through text-red-500">${JSON.stringify(fix.wrong)}</span> → <span class="text-emerald-700">${JSON.stringify(fix.correct)}</span></div>`);
+      }
+    }
+    if (r.note) parts.push(`<div class="italic text-slate-600">📝 ${r.note}</div>`);
+    const ctx = r.context ? `<div class="text-xs text-slate-400 mt-1">${r.context.sigla || ''} · ${r.context.empresa || ''}</div>` : '';
+    const date = new Date(r.ts || it.updated_at).toLocaleDateString('es-AR');
+    return `<div class="border rounded p-3 text-sm bg-slate-50">
+      <div class="flex justify-between items-start gap-2">
+        <div class="flex-1 space-y-1">${parts.join('') || '<em class="text-slate-400">(vacía)</em>'}${ctx}</div>
+        <div class="flex flex-col items-end gap-1">
+          <span class="text-xs text-slate-400">${date}</span>
+          <button class="text-red-500 text-xs" data-rule="${it.key}">Eliminar</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  $('rules-list').querySelectorAll('[data-rule]').forEach(b => b.onclick = async () => {
+    if (!confirm('¿Eliminar esta regla?')) return;
+    await fetch(`${SB_URL}/rest/v1/kb_data?key=eq.${encodeURIComponent(b.dataset.rule)}`, { method:'DELETE', headers:{ apikey:SB_KEY, Authorization:`Bearer ${SB_KEY}` } });
+    renderRulesList(); fetchActiveRules();
+  });
+}
 function renderSindList() {
   $('sind-list').innerHTML = Object.entries(SIND_DICT).sort().map(([s,n]) => `<div class="flex items-center gap-2 py-1 border-b last:border-0"><span class="mono font-bold text-indigo-700" style="min-width:120px">${s}</span><span class="flex-1">${n}</span><button class="text-red-500" data-s="${s}">×</button></div>`).join('');
   $('sind-list').querySelectorAll('button').forEach(b => b.onclick = async () => { delete SIND_DICT[b.dataset.s]; await kbSet('sindicatos', SIND_DICT); renderSindList(); });
@@ -566,6 +698,7 @@ document.querySelectorAll('.modal-close').forEach(b => b.onclick = () => { $('mo
     if (s) SIND_DICT = { ...SIND_SEED, ...s }; else await kbSet('sindicatos', SIND_DICT);
     if (bl) BLACKLIST = bl; else await kbSet('blacklist_emails', BLACKLIST);
     sb.textContent = '● conectado'; sb.className = 'pill bg-emerald-100 text-emerald-800';
+    await fetchActiveRules();
   } catch {
     sb.textContent = '● offline'; sb.className = 'pill bg-red-100 text-red-800';
   }

@@ -297,6 +297,8 @@ DICCIONARIO DE SINDICATOS
 
 Si encontrás una sigla en los PDFs que NO esté en el diccionario, igual extraela y devolvela en "sigla" — el usuario completará el nombre.
 
+{{RULES_SECTION}}
+
 ═══════════════════════════════════════════════════════════════════
 FORMATO DE SALIDA — JSON ESTRICTO
 ═══════════════════════════════════════════════════════════════════
@@ -367,13 +369,39 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { pdfs, sindicatos } = req.body || {};
+    const { pdfs, sindicatos, rules } = req.body || {};
     if (!Array.isArray(pdfs) || pdfs.length === 0) {
       return res.status(400).json({ error: 'No se recibieron PDFs' });
     }
 
     const sindDict = sindicatos || DEFAULT_SINDICATOS;
-    const finalPrompt = PROMPT.replace('{{SINDICATOS_JSON}}', JSON.stringify(sindDict, null, 2));
+    let rulesText = '';
+    if (Array.isArray(rules) && rules.length > 0) {
+      const lines = rules.map((r, i) => {
+        const parts = [];
+        if (r.scenario_fix) parts.push(`Escenario: cuando ${r.scenario_fix.context || 'parezca similar'}, es "${r.scenario_fix.correct}" (NO "${r.scenario_fix.wrong}")`);
+        if (r.field_fixes && Object.keys(r.field_fixes).length > 0) {
+          for (const [field, fix] of Object.entries(r.field_fixes)) {
+            parts.push(`Campo "${field}": si detectás "${JSON.stringify(fix.wrong)}", corregí a "${JSON.stringify(fix.correct)}"`);
+          }
+        }
+        if (r.note) parts.push(`Nota del usuario: ${r.note}`);
+        return parts.length > 0 ? `${i + 1}. ${parts.join(' | ')}` : null;
+      }).filter(Boolean);
+      if (lines.length > 0) {
+        rulesText = `═══════════════════════════════════════════════════════════════════
+REGLAS APRENDIDAS DE CASOS ANTERIORES — APLICAR SI CORRESPONDE
+═══════════════════════════════════════════════════════════════════
+
+${lines.join('\n')}
+
+Si alguna de estas reglas aplica al caso actual, seguila. Son correcciones que el usuario hizo manualmente en casos pasados.`;
+      }
+    }
+
+    const finalPrompt = PROMPT
+      .replace('{{SINDICATOS_JSON}}', JSON.stringify(sindDict, null, 2))
+      .replace('{{RULES_SECTION}}', rulesText);
 
     const parts = [{ text: finalPrompt }];
     for (const pdf of pdfs) {
