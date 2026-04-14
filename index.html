@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Notificador DGRDT</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .mono { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:9999px; font-size:11px; font-weight:600; }
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; background:#e0e7ff; color:#3730a3; border-radius:9999px; font-size:12px; font-weight:500; }
+  .chip button { background:none; border:none; color:#4f46e5; cursor:pointer; font-weight:700; }
+  .field-label { font-size:11px; font-weight:600; text-transform:uppercase; color:#64748b; letter-spacing:0.05em; margin-bottom:4px; display:block; }
+  .input { width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:14px; }
+  .input:focus { outline:2px solid #6366f1; outline-offset:-1px; border-color:transparent; }
+  .btn { padding:8px 14px; border-radius:6px; font-weight:600; font-size:14px; cursor:pointer; transition:all 0.15s; border:none; }
+  .btn-primary { background:#4f46e5; color:white; }
+  .btn-primary:hover { background:#4338ca; }
+  .btn-secondary { background:#f1f5f9; color:#334155; border:1px solid #cbd5e1; }
+  .btn-secondary:hover { background:#e2e8f0; }
+  .btn-danger { background:#dc2626; color:white; }
+  .btn-danger:hover { background:#b91c1c; }
+  .output-box { background:#0f172a; color:#e2e8f0; padding:14px; border-radius:8px; font-family:"SF Mono", Menlo, monospace; font-size:13px; white-space:pre-wrap; line-height:1.6; }
+  .dropzone { border:2px dashed #cbd5e1; border-radius:10px; padding:32px; text-align:center; transition:all 0.2s; }
+  .dropzone.drag { border-color:#4f46e5; background:#eef2ff; }
+  .spinner { display:inline-block; width:16px; height:16px; border:2px solid #e2e8f0; border-top-color:#4f46e5; border-radius:50%; animation:spin 0.8s linear infinite; vertical-align:middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+
+<div class="max-w-7xl mx-auto p-6 space-y-6">
+  <header class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-bold">Notificador DGRDT</h1>
+      <p class="text-sm text-slate-500">PDFs → IA (Gemini) → notificación lista</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <span id="sb-status" class="pill bg-slate-200 text-slate-600">conectando…</span>
+      <button id="btn-config" class="btn btn-secondary">⚙️ Config</button>
+      <button id="btn-history" class="btn btn-secondary">📜 Historial</button>
+    </div>
+  </header>
+
+  <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <h2 class="font-bold text-slate-800 mb-3">1. Cargar PDFs</h2>
+    <div id="dropzone" class="dropzone">
+      <p class="text-slate-600 mb-2">Arrastrá PDFs acá o</p>
+      <input type="file" id="file-input" multiple accept="application/pdf" class="hidden" />
+      <button id="btn-browse" class="btn btn-primary">Elegir archivos</button>
+      <p class="text-xs text-slate-400 mt-3">PV, IF, RE, RESOL — todos juntos</p>
+    </div>
+    <div id="files-list" class="mt-3 space-y-1"></div>
+    <div id="loading" class="hidden mt-3 flex items-center gap-2 text-sm text-slate-600">
+      <span class="spinner"></span> <span id="loading-msg">Procesando…</span>
+    </div>
+  </section>
+
+  <section id="section-warnings" class="hidden bg-amber-50 border border-amber-300 rounded-xl p-4 text-sm text-amber-900">
+    <strong>⚠️ Cosas poco claras:</strong>
+    <ul id="warnings-list" class="list-disc ml-6 mt-1"></ul>
+  </section>
+
+  <section id="section-data" class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 hidden">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="font-bold">2. Datos detectados <span class="text-xs font-normal text-slate-500">(editá si hace falta)</span></h2>
+      <div class="flex items-center gap-2">
+        <span id="confidence-badge" class="pill"></span>
+        <button id="btn-regen" class="btn btn-secondary text-xs">🔄 Regenerar</button>
+      </div>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="md:col-span-3"><label class="field-label">Escenario</label><select id="f-scenario" class="input"></select></div>
+      <div><label class="field-label">EX</label><input id="f-ex" class="input mono" /></div>
+      <div><label class="field-label">PV</label><input id="f-pv" class="input mono" /></div>
+      <div><label class="field-label">IF</label><input id="f-if" class="input mono" /></div>
+      <div><label class="field-label">RE</label><input id="f-re" class="input mono" /></div>
+      <div><label class="field-label">RESOL</label><input id="f-resol" class="input mono" /></div>
+      <div><label class="field-label">Sigla</label><input id="f-sigla" class="input" /></div>
+      <div class="md:col-span-2"><label class="field-label">Sindicato</label><input id="f-sindicato" class="input" /></div>
+      <div><label class="field-label">Empresa(s) <span class="text-slate-400 text-[10px] normal-case">(coma)</span></label><input id="f-empresas" class="input" /></div>
+      <div><label class="field-label">Día</label><input id="f-dia" class="input" /></div>
+      <div><label class="field-label">Fecha</label><input id="f-fecha" class="input" /></div>
+      <div><label class="field-label">Mes</label><input id="f-mes" class="input" /></div>
+      <div><label class="field-label">Año</label><input id="f-anio" class="input" /></div>
+      <div><label class="field-label">Hora</label><input id="f-hora" class="input" /></div>
+      <div><label class="field-label">Meet Link</label><input id="f-meet" class="input mono" /></div>
+      <div><label class="field-label">Fecha del Acta</label><input id="f-fecha-acta" class="input" /></div>
+      <div><label class="field-label">¿Notifica mismo día?</label>
+        <select id="f-mismodia" class="input">
+          <option value="true">Sí — "en el día de la fecha"</option>
+          <option value="false">No — fecha explícita</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <section id="section-emails" class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 hidden">
+    <h2 class="font-bold mb-3">3. Emails</h2>
+    <div class="grid md:grid-cols-2 gap-4">
+      <div>
+        <label class="field-label">Sindicato</label>
+        <div id="emails-sindicato-chips" class="flex flex-wrap gap-2 mb-2"></div>
+        <div class="flex gap-2"><input id="email-sindicato-new" class="input" placeholder="email@sindicato.com" /><button id="btn-add-sind" class="btn btn-secondary">+</button></div>
+      </div>
+      <div>
+        <label class="field-label">Empresa</label>
+        <div id="emails-empresa-chips" class="flex flex-wrap gap-2 mb-2"></div>
+        <div class="flex gap-2"><input id="email-empresa-new" class="input" placeholder="rrhh@empresa.com" /><button id="btn-add-emp" class="btn btn-secondary">+</button></div>
+      </div>
+    </div>
+    <div id="tad-banner" class="mt-3 hidden bg-amber-50 border border-amber-200 text-amber-800 text-sm p-3 rounded-lg">
+      ⚠️ Sin email de empresa → doble notificación (sindicato + TAD)
+    </div>
+  </section>
+
+  <section id="section-output" class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 hidden">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="font-bold">4. Notificación</h2>
+      <button id="btn-save-case" class="btn btn-secondary">💾 Guardar caso</button>
+    </div>
+    <div id="output-container" class="space-y-4"></div>
+  </section>
+</div>
+
+<div id="modal-config" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto p-6">
+    <div class="flex justify-between items-center mb-4"><h3 class="text-xl font-bold">Configuración</h3><button class="modal-close text-slate-400 text-2xl">×</button></div>
+    <div class="space-y-6">
+      <div>
+        <h4 class="font-bold mb-2">Sindicatos</h4>
+        <div id="sind-list" class="space-y-1 max-h-64 overflow-y-auto border rounded p-2 mb-2 text-sm"></div>
+        <div class="flex gap-2"><input id="sind-sigla" class="input" placeholder="SIGLA" style="max-width:140px" /><input id="sind-nombre" class="input" placeholder="Nombre completo" /><button id="btn-add-sind-dict" class="btn btn-primary">+</button></div>
+      </div>
+      <div>
+        <h4 class="font-bold mb-2">Emails bloqueados</h4>
+        <div id="blacklist-list" class="space-y-1 mb-2"></div>
+        <div class="flex gap-2"><input id="blacklist-new" class="input" placeholder="email@bloqueado.com" /><button id="btn-add-blacklist" class="btn btn-danger">Bloquear</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-history" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6">
+    <div class="flex justify-between items-center mb-4"><h3 class="text-xl font-bold">Historial</h3><button class="modal-close text-slate-400 text-2xl">×</button></div>
+    <div id="history-list" class="space-y-2"></div>
+  </div>
+</div>
+
+<script>
+const SB_URL = 'https://pdvutxfrexiekymprcfq.supabase.co';
+const SB_KEY = 'sb_publishable_Lg9yy06NR3s7J_gl1yuuYw_GGbmCKt_';
+
+async function kbGet(key) {
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/kb_data?key=eq.${encodeURIComponent(key)}&select=value`, { headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` } });
+    if (!r.ok) return null;
+    const d = await r.json(); return d[0]?.value ?? null;
+  } catch { return null; }
+}
+async function kbSet(key, value) {
+  try {
+    await fetch(`${SB_URL}/rest/v1/kb_data`, { method:'POST', headers:{ apikey:SB_KEY, Authorization:`Bearer ${SB_KEY}`, 'Content-Type':'application/json', Prefer:'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ key, value, updated_at: new Date().toISOString() }) });
+    return true;
+  } catch { return false; }
+}
+async function kbList(prefix) {
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/kb_data?key=like.${encodeURIComponent(prefix+'%')}&select=key,value,updated_at&order=updated_at.desc`, { headers:{ apikey:SB_KEY, Authorization:`Bearer ${SB_KEY}` } });
+    return r.ok ? await r.json() : [];
+  } catch { return []; }
+}
+
+const SIND_SEED = {
+  "SMATA":"SINDICATO DE MECÁNICOS Y AFINES DEL TRANSPORTE AUTOMOTOR",
+  "UTEDYC":"UNION TRABAJADORES DE ENTIDADES DEPORTIVAS Y CIVILES",
+  "UOMRA":"UNION OBRERA METALURGICA DE LA REPUBLICA ARGENTINA",
+  "STIMRA":"SINDICATO DE TRABAJADORES DE LA INDUSTRIA MARROQUINERA DE LA REPÚBLICA ARGENTINA",
+  "SESEIC":"SINDICATO DE EMPLEADOS, CAPATACES Y ENCARGADOS DE LA INDUSTRIA DEL CUERO",
+  "UOYEP":"UNION OBREROS Y EMPLEADOS PLASTICO",
+  "UI":"UNION INFORMATICA",
+  "FOETRA":"FEDERACION DE OBREROS Y EMPLEADOS TELEFONICOS DE LA REPUBLICA ARGENTINA",
+  "SOCAMGLYP":"SINDICATO DE OBREROS COLOCADORES DE AZULEJOS, MOSAICOS, GRANITEROS, LUSTRADORES, Y PORCELANEROS"
+};
+let SIND_DICT = { ...SIND_SEED };
+let BLACKLIST = ["utedyccapital@gremiales.org.ar"];
+
+const SCENARIOS = {
+  audiencia_presencial:"Audiencia Presencial CON Presentación",
+  audiencia_virtual:"Audiencia Virtual CON Presentación",
+  audiencia_sin_presentacion_presencial:"Audiencia Presencial SIN Presentación",
+  audiencia_sin_presentacion_virtual:"Audiencia Virtual SIN Presentación",
+  cambio_fecha_con_presentacion:"Cambio de Fecha CON Presentación",
+  cambio_fecha_sin_presentacion:"Cambio de Fecha SIN Presentación",
+  reserva:"Reserva / Acta digital para firma",
+  reserva_con_nueva_audiencia_virtual:"Reserva + Nueva audiencia VIRTUAL",
+  reserva_con_nueva_audiencia_presencial:"Reserva + Nueva audiencia PRESENCIAL",
+  nueva_audiencia_acta:"Nueva audiencia desde acta (ambas partes)",
+  nueva_audiencia_acta_ausente_presencial:"Nueva audiencia — empresa ausente (presencial)",
+  nueva_audiencia_acta_ausente_virtual:"Nueva audiencia — empresa ausente (virtual)",
+  acuerdo:"Acuerdo — pendiente acto administrativo",
+  resolucion:"Resolución (RESOL)",
+  acta_olografa_ambas:"Acta ológrafa + ambas partes (NO se notifica)"
+};
+const MESES_MAP = {enero:1,febrero:2,marzo:3,abril:4,mayo:5,junio:6,julio:7,agosto:8,septiembre:9,octubre:10,noviembre:11,diciembre:12};
+
+const state = {
+  data: { ex:'',pv:'',if_:'',re:'',resol:'',sigla:'',sindicato:'',empresas:[],dia:'',fecha:'',mes:'',anio:'',hora:'',meet:'',fecha_acta:'',mismo_dia:true,scenario:'' },
+  emails_sind: [], emails_emp: [],
+  notification: { asunto:'',cuerpo:'',interno:'',no_notifica:false }
+};
+const $ = id => document.getElementById(id);
+
+const dropzone = $('dropzone'), fileInput = $('file-input');
+$('btn-browse').onclick = () => fileInput.click();
+fileInput.addEventListener('change', e => handleFiles(e.target.files));
+['dragenter','dragover'].forEach(ev => dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.add('drag'); }));
+['dragleave','drop'].forEach(ev => dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.remove('drag'); }));
+dropzone.addEventListener('drop', e => handleFiles(e.dataTransfer.files));
+
+function fileToBase64(file) {
+  return new Promise((res,rej) => { const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(file); });
+}
+
+async function handleFiles(fileList) {
+  const files = [...fileList].filter(f => f.type==='application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+  if (files.length === 0) return;
+  $('files-list').innerHTML = files.map(f => `<div class="text-sm text-slate-600">📄 ${f.name}</div>`).join('');
+  $('loading').classList.remove('hidden');
+  $('loading-msg').textContent = 'Leyendo PDFs…';
+  try {
+    const pdfs = [];
+    for (const f of files) pdfs.push({ name: f.name, data: await fileToBase64(f) });
+    $('loading-msg').textContent = 'Procesando con IA (15-30s)…';
+    const r = await fetch('/api/notify', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ pdfs, sindicatos: SIND_DICT }) });
+    const result = await r.json();
+    if (!r.ok) throw new Error(result.error || 'Error en /api/notify');
+    applyResult(result);
+  } catch (e) {
+    alert('Error: ' + e.message); console.error(e);
+  } finally {
+    $('loading').classList.add('hidden');
+  }
+}
+
+function applyResult(result) {
+  if (result.warnings?.length > 0) {
+    $('warnings-list').innerHTML = result.warnings.map(w => `<li>${w}</li>`).join('');
+    $('section-warnings').classList.remove('hidden');
+  } else $('section-warnings').classList.add('hidden');
+
+  const ex = result.extracted || {};
+  Object.assign(state.data, {
+    ex:ex.ex||'',pv:ex.pv||'',if_:ex.if_||'',re:ex.re||'',resol:ex.resol||'',
+    sigla:ex.sigla||'',sindicato:ex.sindicato||'',empresas:ex.empresas||[],
+    dia:ex.dia||'',fecha:ex.fecha||'',mes:ex.mes||'',anio:ex.anio||'',hora:ex.hora||'',
+    meet:ex.meet||'',fecha_acta:ex.fecha_acta||'',
+    mismo_dia: ex.mismo_dia===undefined ? true : ex.mismo_dia,
+    scenario: result.scenario || 'audiencia_presencial'
+  });
+  state.notification = result.notification || { asunto:'',cuerpo:'',interno:'',no_notifica:false };
+
+  const badge = $('confidence-badge'), conf = result.confidence || 'medium';
+  badge.textContent = `confianza: ${conf}`;
+  badge.className = 'pill ' + (conf==='high'?'bg-emerald-100 text-emerald-800':conf==='low'?'bg-red-100 text-red-800':'bg-amber-100 text-amber-800');
+
+  loadSavedEmails().then(() => {
+    renderForm(); renderEmailChips(); renderOutput();
+    ['section-data','section-emails','section-output'].forEach(s => $(s).classList.remove('hidden'));
+  });
+}
+
+async function loadSavedEmails() {
+  state.emails_sind = []; state.emails_emp = [];
+  if (state.data.ex) {
+    const saved = await kbGet(`email:${state.data.ex}`);
+    if (saved) {
+      state.emails_sind = (saved.sindicato||[]).filter(e => !BLACKLIST.includes(e));
+      state.emails_emp = (saved.empresa||[]).filter(e => !BLACKLIST.includes(e));
+    }
+  }
+  if (state.emails_sind.length === 0 && state.data.sigla) {
+    const g = await kbGet(`email:_g_${state.data.sigla}`);
+    if (g) state.emails_sind = g.filter(e => !BLACKLIST.includes(e));
+  }
+}
+
+function populateScenarios() {
+  $('f-scenario').innerHTML = Object.entries(SCENARIOS).map(([k,v]) => `<option value="${k}">${v}</option>`).join('');
+}
+function renderForm() {
+  const d = state.data;
+  $('f-scenario').value = d.scenario; $('f-ex').value = d.ex; $('f-pv').value = d.pv;
+  $('f-if').value = d.if_; $('f-re').value = d.re; $('f-resol').value = d.resol;
+  $('f-sigla').value = d.sigla; $('f-sindicato').value = d.sindicato;
+  $('f-empresas').value = (d.empresas||[]).join(', ');
+  $('f-dia').value = d.dia; $('f-fecha').value = d.fecha; $('f-mes').value = d.mes;
+  $('f-anio').value = d.anio; $('f-hora').value = d.hora; $('f-meet').value = d.meet;
+  $('f-fecha-acta').value = d.fecha_acta; $('f-mismodia').value = String(d.mismo_dia);
+}
+function readForm() {
+  const d = state.data;
+  d.scenario = $('f-scenario').value; d.ex = $('f-ex').value.trim(); d.pv = $('f-pv').value.trim();
+  d.if_ = $('f-if').value.trim(); d.re = $('f-re').value.trim(); d.resol = $('f-resol').value.trim();
+  d.sigla = $('f-sigla').value.toUpperCase().replace(/\./g,'').replace(/\s+/g,'');
+  d.sindicato = $('f-sindicato').value.trim();
+  d.empresas = $('f-empresas').value.split(',').map(s => s.trim()).filter(Boolean);
+  d.dia = $('f-dia').value.trim().toLowerCase(); d.fecha = $('f-fecha').value.trim();
+  d.mes = $('f-mes').value.trim().toLowerCase(); d.anio = $('f-anio').value.trim();
+  d.hora = $('f-hora').value.trim(); d.meet = $('f-meet').value.trim();
+  d.fecha_acta = $('f-fecha-acta').value.trim(); d.mismo_dia = $('f-mismodia').value === 'true';
+}
+$('f-sigla').addEventListener('blur', () => {
+  const s = $('f-sigla').value.toUpperCase().replace(/\./g,'').replace(/\s+/g,'');
+  if (SIND_DICT[s] && !$('f-sindicato').value) $('f-sindicato').value = SIND_DICT[s];
+});
+
+const SEDE = 'en la sede de la Secretaria de Trabajo y Empleo del Gobierno de la Ciudad de Buenos Aires, Dirección General Relaciones del Trabajo, Gerencia Operativa Relaciones Laborales Colectivas, sita en Bartolomé Mitre 575, P.B., C.A.B.A.';
+function ddm(d) { if(!d.fecha||!d.mes)return ''; const m=MESES_MAP[d.mes.toLowerCase()]||d.mes; return `${d.fecha}/${m}`; }
+function fechaLarga(d) { return `${d.dia}, ${d.fecha} de ${d.mes} de ${d.anio}, a las ${d.hora} horas`; }
+function fechaActaFraseo(d) { return d.mismo_dia?'en el día de la fecha':`en el día ${d.fecha_acta}`; }
+function header(d, opts={}) {
+  const sind = `${d.sindicato} (${d.sigla})`, emps = d.empresas.filter(Boolean);
+  if (opts.soloEmpresa) return emps.length===1 ? `Señor ${emps[0]}:` : `Señores ${emps.join(' - ')}:`;
+  if (opts.ambasPartes!==false && emps.length===1) return `Señores ${sind} y ${emps[0]}:`;
+  if (emps.length===0) return `Señores ${sind}:`;
+  return `Señores ${sind} - ${emps.slice(0,-1).join(' - ')}${emps.length>1?' y ':''}${emps[emps.length-1]}:`;
+}
+
+const T = {
+  audiencia_presencial: d => ({
+    asunto: `${d.ex}. ${d.sigla} - ${d.empresas[0]||''}. NOTIFICA ${d.pv}.`,
+    cuerpo: `${header(d)}\n\nPor este medio, atento a la presentación efectuada por el ${d.sindicato} (${d.sigla}) - ${d.re} - se notifica la ${d.pv} mediante la cual se señala fecha de audiencia para el día ${fechaLarga(d)} ${SEDE}\n\nSe adjunta ${d.re}.\nSe adjunta ${d.pv}.\n\nQuedan ustedes debidamente notificados.`,
+    interno: `APERTURA ${d.ex} ${d.sigla} - ${d.empresas[0]||''}. PTCIÓN [${d.sigla}]. SE FIJÓ FECHA DE AUD. PARA EL ${ddm(d)}, ${d.hora} Hs. SE GENERÓ PV. NOTIFICADO. VINCULADO. AGENDADO.`
+  }),
+  audiencia_virtual: d => ({
+    asunto: `${d.ex}. ${d.sigla} - ${d.empresas[0]||''}. NOTIFICA ${d.pv}.`,
+    cuerpo: `${header(d)}\n\nPor este medio, y atento a la presentación efectuada por el ${d.sindicato} (${d.sigla}), ${d.re}, la cual se adjunta, se notifica la ${d.pv} mediante la cual se fija audiencia virtual para el día ${fechaLarga(d)} por medio de la plataforma digital GOOGLE MEET, conforme a DI-2024-533-GCABA-DGRDT.\n\nAsimismo, se notifica detalles de la invitación a la audiencia a celebrarse en la fecha indicada al siguiente link: ${d.meet}\n\nSe adjunta ${d.pv}.\nSe adjunta ${d.re}.\nSe adjunta DI-2024-533-GCABA-DGRDT.\n\nQuedan ustedes debidamente notificados.`,
+    interno: `APERTURA ${d.ex} ${d.sigla} - ${d.empresas[0]||''}. PTCIÓN [${d.sigla}]. SE FIJÓ FECHA DE AUD. VIRTUAL PARA EL ${ddm(d)}, ${d.hora} Hs. SE GENERÓ PV. NOTIFICADO. VINCULADO. AGENDADO.`
+  }),
+  audiencia_sin_presentacion_presencial: d => ({
+    asunto: `${d.ex}. ${d.sigla} - ${d.empresas[0]||''}. NOTIFICA ${d.pv}.`,
+    cuerpo: `${header(d,{ambasPartes:false})}\n\nPor este medio, se notifica la ${d.pv} mediante la cual se fija fecha de audiencia para el día ${fechaLarga(d)} ${SEDE}\n\nSe adjunta ${d.pv}.\n\nQuedan ustedes debidamente notificados.`,
+    interno: `${d.ex} ${d.sigla} - ${d.empresas[0]||''}. SE FIJÓ FECHA DE AUD. PARA EL ${ddm(d)}, ${d.hora} Hs. SE GENERÓ PV. NOTIFICADO. VINCULADO. AGENDADO.`
+  }),
+  audiencia_sin_presentacion_virtual: d => ({
+    asunto: `${d.ex}. ${d.sigla} - ${d.empresas[0]||''}. NOTIFICA ${d.pv}.`,
+    cuerpo: `${header(d,{ambasPartes:false})}\n\nPor este medio, se notifica la ${d.pv} mediante la cual se fija fecha de audiencia virtual por medio de la plataforma digital GOOGLE MEET, para el día ${fechaLarga(d)}, link: ${d.meet} conforme DI-2024-533-GCABA-DGRDT.\n\nSe adjunta ${d.pv}.\nSe adjunta DI-2024-533-GCABA-DGRDT.\n\nQuedan ustedes debidamente notificados.`,
+    interno: `${d.ex} ${d.sigla} - ${d.empresas[0]||''}. SE FIJÓ FECHA DE AUD. VIRTUAL PARA EL ${ddm(d)}, ${d.hora} Hs. SE GENERÓ PV. NOTIFICADO. VINCULADO. AGENDADO.`
+  }),
+  cambio_fecha_con_presentacion: d => ({
+    asunto: `CAMBIO DE FECHA DE AUD ${d.ex} ${d.sigla} - ${d.empresas[0]||''}. NOTIFICA ${d.pv}`,
+    cuerpo: `${header(d)}\n\nPor este medio, atento a la presentación efectuada - ${d.re} - se notifica la ${d.pv} mediante la cual se reprograma la audiencia para el día ${fechaLarga(d)}${d.meet?' por medio de la plataforma digital GOOGLE MEET, link: '+d.meet+', conforme a DI-2024-533-GCABA-DGRDT.':' '+SEDE}\n\nSe adjunta ${d.re}.\nSe adjunta ${d.pv}.${d.meet?'\nSe adjunta DI-2024-533-GCABA-DGRDT.':''}\n\nQuedan ustedes debidamente notificados.`,
+    interno: `${d.ex} ${d.sigla} - ${d.empresas[0]||''}. PTCIÓN [${d.sigla}] SOLICITANDO CAMBIO DE FECHA DE AUD. ${d.if_?'['+d.if_+']. ':''}SE FIJÓ AUDIENCIA PARA EL DIA ${ddm(d)}, ${d.hora} Hs. SE GENERÓ PV Y NOTIFICACION. VINCULADO. AGENDADO.`
+  }),
+  cambio_fecha_sin_presentacion: d => ({
+    asunto: `CAMBIO DE FECHA DE AUD ${d.ex} ${d.sigla} - ${d.empresas[0]||''}. NOTIFICA ${d.pv}`,
+    cuerpo: `${header(d)}\n\nPor este medio, se notifica la ${d.pv} mediante la cual se reprograma la audiencia para el día ${fechaLarga(d)}${d.meet?' por medio de GOOGLE MEET, link: '+d.meet+'.':' '+SEDE}\n\nSe adjunta ${d.pv}.${d.meet?'\nSe adjunta DI-2024-533-GCABA-DGRDT.':''}\n\nQuedan ustedes debidamente notificados.`,
+    interno: `${d.ex} ${d.sigla} - ${d.empresas[0]||''}. SE REPROGRAMÓ AUD. PARA EL ${ddm(d)}, ${d.hora} Hs. SE GENERÓ PV. NOTIFICADO. VINCULADO. AGENDADO.`
+  }),
+  reserva: d => ({
+    asunto: `${d.ex}. ${d.sigla} - ${d.empresas[0]||''}. NOTIFICA ACTA DE AUD. DEL ${d.fecha_acta} PARA FIRMAR`,
+    cuerpo: `${header(d)}\n\nEn virtud de la audiencia llevada a cabo ${fechaActaFraseo(d)}, se remite el acta labrada en ese acto a los fines de su firma. Una vez suscripta por los representantes de ambas partes, nos la deben enviar escaneada por este medio en el plazo de 48 horas bajo apercibimiento de tenerlos por no presentados.\n\nSe adjunta ACTA DE AUDIENCIA DEL ${d.fecha_acta} PARA FIRMAR - ${d.if_}.\n\nQuedan ustedes debidamente notificados.`,
+    interno: `${d.ex} ${d.sigla} - ${d.empresas[0]||''}. SE TOMÓ AUD. RESERVA POR 10 DIAS. SE GENERÓ ACTA. VINCULADO.`
+  }),
+  reserva_con_nueva_audiencia_virtual: d => ({
+    asunto: `${d.ex}. ${d.sigla} - ${d.empresas[0]||''}. NOTIFICA ACTA DE AUD. DEL ${d.fecha_acta} PARA FIRMAR`,
+    cuerpo: `${header(d)}\n\nEn virtud de la audiencia llevada a cabo ${fechaActaFraseo(d)}, se remite el acta labrada en ese acto a los fines de su firma. Una vez suscripta por los representantes de ambas partes, nos la deben enviar escaneada por este medio en el plazo de 48 horas bajo apercibimiento de tenerlos por no presentados.\n\nAsimismo, se señala una nueva fecha de audiencia virtual para el día ${fechaLarga(d)} la cual será llevada a cabo a través de la plataforma GOOGLE MEET: ${d.meet}.\n\nSe adjunta ACTA DE AUDIENCIA DEL ${d.fecha_acta} PARA FIRMAR - ${d.if_}.\nSe adjunta DI-2024-533-GCABA-DGRDT.\n\nQuedan ustedes debidamente notificados.`,
+    interno: `${d.ex} ${d.sigla} - ${d.empresas[0]||''}. SE TOMÓ AUD. COMPARECEN AMBAS PARTES. SE FIJÓ NVA. FECHA DE AUD. VIRTUAL PARA EL ${ddm(d)}, ${d.hora} Hs. SE GENERÓ ACTA. VINCULADO. AGENDADO.`
+  }),
+  reserva_con_nueva_audiencia_presencial: d => ({
+    asunto: `${d.ex}. ${d.sigla} - ${d.empresas[0]||''}. NOTIFICA ACTA DE AUD. DEL ${d.fecha_acta} PARA FIRMAR`,
+    cuerpo: `${header(d)}\n\nEn virtud de la audiencia llevada a cabo ${fechaActaFraseo(d)}, se remite el acta labrada en ese acto a los fines de su firma. Una vez suscripta por los representantes de ambas partes, nos la deben enviar escaneada por este medio en el plazo de 48 horas bajo apercibimiento de tenerlos por no presentados.\n\nAsimismo, se señala una nueva fecha de audiencia para el día ${fechaLarga(d)} ${SEDE}\n\nSe adjunta ACTA DE AUDIENCIA DEL ${d.fecha_acta} PARA FIRMAR - ${d.if_}.\n\nQuedan ustedes debidamente notificados.`,
+    interno: `${d.ex} ${d.sigla} - ${d.empresas[0]||''}. SE TOMÓ AUD. COMPARECEN AMBAS PARTES. SE FIJÓ NVA. FECHA DE AUD. PARA EL ${ddm(d)}, ${d.hora} Hs. SE GENERÓ ACTA. VINCULADO. AGENDADO.`
+  }),
+  nueva_audiencia_acta: d => ({
+    asunto: `${d.ex}. ${d.sigla} - ${d.empresas[0]||''}. NOTIFICA ACTA DE AUD. DEL ${d.fecha_acta}`,
+    cuerpo: `${header(d)}\n\nPor este medio se notifica el acta de la audiencia celebrada ${fechaActaFraseo(d)} - ${d.if_}.\nAsimismo, se señala una nueva fecha de audiencia para el día ${fechaLarga(d)}${d.meet?' la cual será llevada a cabo a través de la plataforma GOOGLE MEET: '+d.meet+'.':' '+SEDE}\n\nSe adjunta ${d.if_}.${d.meet?'\nSe adjunta DI-2024-533-GCABA-DGRDT.':''}\n\nQuedan ustedes debidamente notificados.`,
+    interno: `${d.ex} ${d.sigla} - ${d.empresas[0]||''}. SE TOMÓ AUD. COMPARECEN AMBAS PARTES, SE FIJÓ NVA. FECHA DE AUD. PARA EL ${ddm(d)}, ${d.hora} Hs. VINCULADO. AGENDADO.`
+  }),
+  nueva_audiencia_acta_ausente_presencial: d => ({
+    asunto: `${d.ex}. ${d.sigla} - ${d.empresas[0]||''}. NOTIFICA ACTA DE AUD. DEL ${d.fecha_acta}`,
+    cuerpo: `${header(d,{soloEmpresa:true})}\n\nPor este medio se notifica el acta de la audiencia celebrada ${fechaActaFraseo(d)} - ${d.if_}.\nAsimismo, se señala nueva fecha de audiencia para el día ${fechaLarga(d)} ${SEDE}\n\nSe adjunta ${d.if_}.\n\nQueda usted debidamente notificado.`,
+    interno: `${d.ex} ${d.sigla} - ${d.empresas[0]||''}. PTCIÓN [${d.sigla}]. SE FIJÓ NVA. FECHA DE AUD. PARA EL ${ddm(d)}, ${d.hora} Hs. SE GENERÓ PV. NOTIFICADO. VINCULADO. AGENDADO.`
+  }),
+  nueva_audiencia_acta_ausente_virtual: d => ({
+    asunto: `${d.ex}. ${d.sigla} - ${d.empresas[0]||''}. NOTIFICA ACTA DE AUD. DEL ${d.fecha_acta}`,
+    cuerpo: `${header(d,{soloEmpresa:true})}\n\nPor este medio se notifica el acta de la audiencia celebrada ${fechaActaFraseo(d)} - ${d.if_}.\nAsimismo, se señala nueva fecha de audiencia virtual para el día ${fechaLarga(d)}, la cual será llevada a cabo a través de la plataforma GOOGLE MEET: ${d.meet}.\n\nSe adjunta ${d.if_}.\nSe adjunta DI-2024-533-GCABA-DGRDT.\n\nQueda usted debidamente notificado.`,
+    interno: `${d.ex} ${d.sigla} - ${d.empresas[0]||''}. SE FIJÓ NVA. FECHA DE AUD. VIRTUAL PARA EL ${ddm(d)}, ${d.hora} Hs. SE GENERÓ PV. NOTIFICADO. VINCULADO. AGENDADO.`
+  }),
+  acuerdo: d => ({
+    asunto: `${d.ex}. ${d.sigla} - ${d.empresas.join(' - ')}. NOTIFICA ACTA DE AUD. DEL ${d.fecha_acta} PARA FIRMAR`,
+    cuerpo: `${header(d)}\n\nEn virtud de la audiencia llevada a cabo ${fechaActaFraseo(d)}, se remite el acta labrada en ese acto a los fines de su firma. Una vez suscripta por los representantes de ambas partes, nos la deben enviar escaneada por este medio en el plazo de 48 horas bajo apercibimiento de tenerlos por no presentados.\n\nSe adjunta ACTA DE AUDIENCIA DEL ${d.fecha_acta} PARA FIRMAR - ${d.if_}.\n\nQuedan ustedes debidamente notificados.`,
+    interno: `${d.ex} ${d.sigla} - ${d.empresas.join(' - ')}. SE TOMÓ AUD. ACUERDO. SE GENERÓ ACTA. VINCULADO. PENDIENTE ACTO ADMINISTRATIVO.`
+  }),
+  resolucion: d => ({
+    asunto: `${d.ex}. ${d.sigla} - ${d.empresas[0]||''}. NOTIFICA ACTO ADMINISTRATIVO`,
+    cuerpo: `${header(d)}\n\nPor este medio, se notifica el acto administrativo emanado de las presentes actuaciones ${d.resol}, la cual se adjunta.\n\nQuedan ustedes debidamente notificados.`,
+    interno: `${d.ex} ${d.sigla} - ${d.empresas[0]||''}. SE NOTIFICA ACTO ADMINISTRATIVO ${d.resol}. VINCULADO.`
+  }),
+  acta_olografa_ambas: d => ({
+    asunto: '',
+    cuerpo: '⚠️ NO SE NOTIFICA. Las partes quedaron notificadas al firmar en el acto.',
+    interno: `${d.ex} ${d.sigla} - ${d.empresas[0]||''}. SE TOMÓ AUD. COMPARECEN AMBAS PARTES.${d.fecha?' SE FIJÓ NVA. FECHA DE AUD. PARA EL '+ddm(d)+', '+d.hora+' Hs.':''} VINCULADO.${d.fecha?' AGENDADO.':''}`
+  })
+};
+
+$('btn-regen').onclick = () => {
+  readForm();
+  const tpl = T[state.data.scenario]; if (!tpl) return;
+  const out = tpl(state.data);
+  state.notification = { asunto: out.asunto, cuerpo: out.cuerpo, interno: out.interno, no_notifica: state.data.scenario === 'acta_olografa_ambas' };
+  renderOutput();
+};
+
+function sindOnlyBody(s, d) {
+  if (s === 'resolucion') return `Señor ${d.sindicato} (${d.sigla}):\n\nPor este medio, se notifica el acto administrativo ${d.resol}.\n\nSe adjunta ${d.resol}.\n\nQueda usted debidamente notificado.`;
+  if (/^(audiencia|cambio_fecha)/.test(s)) {
+    const v = /virtual/.test(s);
+    return `Señor ${d.sindicato} (${d.sigla}):\n\nPor este medio, se notifica la ${d.pv} mediante la cual se ${v?'fija audiencia virtual':'señala fecha de audiencia'} para el día ${fechaLarga(d)}${v?', link: '+d.meet+'.':' '+SEDE}\n\nSe adjunta ${d.pv}.${v?'\nSe adjunta DI-2024-533-GCABA-DGRDT.':''}\n\nQueda usted debidamente notificado.`;
+  }
+  return `Señor ${d.sindicato} (${d.sigla}):\n\nPor este medio se notifica el acta de la audiencia celebrada ${fechaActaFraseo(d)} - ${d.if_}.\n\nSe adjunta ${d.if_}.\n\nQueda usted debidamente notificado.`;
+}
+function tadMsg(s, d) {
+  if (s === 'resolucion') return `Por este medio, se notifica el acto administrativo ${d.resol} emanado de las presentes actuaciones.`;
+  if (s === 'audiencia_presencial' || s === 'audiencia_virtual') {
+    const v = s === 'audiencia_virtual';
+    return `Por este medio, atento a la presentación efectuada por el ${d.sindicato} (${d.sigla}) - ${d.re} - se notifica la ${d.pv} mediante la cual se ${v?'fija audiencia virtual':'señala fecha de audiencia'} para el día ${fechaLarga(d)}${v?' por GOOGLE MEET, link: '+d.meet+'.':' '+SEDE}`;
+  }
+  if (/^audiencia_sin_presentacion/.test(s)) {
+    const v = /virtual/.test(s);
+    return `Por este medio, se notifica la ${d.pv} mediante la cual se ${v?'fija audiencia virtual':'señala fecha de audiencia'} para el día ${fechaLarga(d)}${v?', link: '+d.meet+'.':' '+SEDE}`;
+  }
+  if (/^cambio_fecha/.test(s)) return `Por este medio, se notifica la ${d.pv} mediante la cual se reprograma la audiencia para el día ${fechaLarga(d)}.`;
+  return `Por este medio se notifica el acta de la audiencia celebrada ${fechaActaFraseo(d)} - ${d.if_}${d.fecha?'. Asimismo, se señala nueva fecha de audiencia para el día '+fechaLarga(d)+'.':'.'}`;
+}
+
+function renderOutput() {
+  const c = $('output-container'), n = state.notification;
+  const hasEmp = state.emails_emp.length > 0, hasSind = state.emails_sind.length > 0;
+  if (n.no_notifica) {
+    c.innerHTML = `<div class="bg-amber-50 border border-amber-300 rounded-lg p-4 text-amber-900"><strong>⚠️ NO SE NOTIFICA.</strong> Las partes quedaron notificadas al firmar en el acto.</div>${outBlock('Texto interno', n.interno)}`;
+    return;
+  }
+  if (!hasEmp && hasSind) {
+    const s = state.data.scenario, d = state.data;
+    c.innerHTML = `
+      <div class="bg-amber-50 border border-amber-300 rounded-lg p-3 text-amber-900 text-sm"><strong>Doble notificación.</strong> Sin email de empresa → email al sindicato + TAD.</div>
+      <h3 class="font-semibold mt-4">📧 Si conseguís email de empresa</h3>
+      ${outBlock('Asunto', n.asunto)}
+      ${outBlock('Cuerpo', n.cuerpo)}
+      <h3 class="font-semibold mt-4">📧 Email solo al sindicato</h3>
+      ${outBlock('Asunto', `${d.ex}. ${d.sigla}. NOTIFICA ${d.pv||d.if_||d.resol}`)}
+      ${outBlock('Cuerpo', sindOnlyBody(s, d))}
+      <h3 class="font-semibold mt-4">🏛️ TAD (empresa)</h3>
+      <div class="bg-slate-100 rounded-lg p-4 space-y-2 text-sm">
+        <div><strong>Expediente:</strong> <span class="mono">${d.ex}</span></div>
+        <div><strong>Documentos:</strong> <span class="mono">${[d.re,d.pv,d.if_,d.resol].filter(Boolean).join(' / ')}</span></div>
+        <div><strong>CUIT:</strong> <em class="text-slate-400">[completar]</em></div>
+      </div>
+      ${outBlock('Mensaje TAD', tadMsg(s, d))}
+      ${outBlock('Texto interno', n.interno)}`;
+    return;
+  }
+  c.innerHTML = `${outBlock('Asunto', n.asunto)}${outBlock('Cuerpo', n.cuerpo)}${outBlock('Texto interno', n.interno)}`;
+}
+function outBlock(title, content) {
+  const id = 'o-' + Math.random().toString(36).slice(2,8);
+  const safe = (content||'').replace(/[&<>]/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[s]));
+  return `<div class="mb-3"><div class="flex items-center justify-between mb-1"><label class="field-label !mb-0">${title}</label><button class="btn btn-secondary text-xs" onclick="copyText('${id}', this)">📋 Copiar</button></div><pre id="${id}" class="output-box">${safe}</pre></div>`;
+}
+window.copyText = (id, btn) => {
+  navigator.clipboard.writeText(document.getElementById(id).textContent).then(() => {
+    const p = btn.textContent; btn.textContent = '✓ Copiado'; setTimeout(() => btn.textContent = p, 1500);
+  });
+};
+
+function renderEmailChips() {
+  const draw = (arr, el, rm) => {
+    el.innerHTML = arr.map((e,i) => `<span class="chip">${e}<button data-i="${i}">×</button></span>`).join('');
+    el.querySelectorAll('button').forEach(b => b.onclick = () => { rm(+b.dataset.i); renderEmailChips(); renderOutput(); });
+  };
+  draw(state.emails_sind, $('emails-sindicato-chips'), i => state.emails_sind.splice(i,1));
+  draw(state.emails_emp, $('emails-empresa-chips'), i => state.emails_emp.splice(i,1));
+  $('tad-banner').classList.toggle('hidden', !(state.emails_sind.length>0 && state.emails_emp.length===0));
+}
+$('btn-add-sind').onclick = () => {
+  const v = $('email-sindicato-new').value.trim().toLowerCase(); if (!v) return;
+  if (BLACKLIST.includes(v)) return alert('Bloqueado');
+  if (!state.emails_sind.includes(v)) state.emails_sind.push(v);
+  $('email-sindicato-new').value = ''; renderEmailChips(); renderOutput();
+};
+$('btn-add-emp').onclick = () => {
+  const v = $('email-empresa-new').value.trim().toLowerCase(); if (!v) return;
+  if (BLACKLIST.includes(v)) return alert('Bloqueado');
+  if (!state.emails_emp.includes(v)) state.emails_emp.push(v);
+  $('email-empresa-new').value = ''; renderEmailChips(); renderOutput();
+};
+['email-sindicato-new','email-empresa-new'].forEach(id => {
+  $(id).addEventListener('keydown', e => { if(e.key==='Enter'){e.preventDefault();$(id==='email-sindicato-new'?'btn-add-sind':'btn-add-emp').click();} });
+});
+
+$('btn-save-case').onclick = async () => {
+  readForm();
+  if (!state.data.ex) return alert('Falta EX');
+  await kbSet(`email:${state.data.ex}`, { sindicato: state.emails_sind, empresa: state.emails_emp });
+  if (state.data.sigla && state.emails_sind.length > 0) {
+    const ex = (await kbGet(`email:_g_${state.data.sigla}`)) || [];
+    const m = [...new Set([...ex, ...state.emails_sind])].filter(e => !BLACKLIST.includes(e));
+    await kbSet(`email:_g_${state.data.sigla}`, m);
+  }
+  if (state.data.sigla && state.data.sindicato && !SIND_DICT[state.data.sigla]) {
+    SIND_DICT[state.data.sigla] = state.data.sindicato;
+    await kbSet('sindicatos', SIND_DICT);
+  }
+  await kbSet(`history:${state.data.ex}:${Date.now()}`, { scenario: state.data.scenario, data: state.data, emails_sind: state.emails_sind, emails_emp: state.emails_emp, notification: state.notification, ts: new Date().toISOString() });
+  flash('✓ Guardado');
+};
+function flash(msg) { const s = $('sb-status'), o = s.textContent, c = s.className; s.textContent = msg; s.className = 'pill bg-emerald-100 text-emerald-800'; setTimeout(() => { s.textContent = o; s.className = c; }, 2000); }
+
+$('btn-config').onclick = () => { renderSindList(); renderBlacklist(); $('modal-config').classList.remove('hidden'); };
+function renderSindList() {
+  $('sind-list').innerHTML = Object.entries(SIND_DICT).sort().map(([s,n]) => `<div class="flex items-center gap-2 py-1 border-b last:border-0"><span class="mono font-bold text-indigo-700" style="min-width:120px">${s}</span><span class="flex-1">${n}</span><button class="text-red-500" data-s="${s}">×</button></div>`).join('');
+  $('sind-list').querySelectorAll('button').forEach(b => b.onclick = async () => { delete SIND_DICT[b.dataset.s]; await kbSet('sindicatos', SIND_DICT); renderSindList(); });
+}
+$('btn-add-sind-dict').onclick = async () => {
+  const s = $('sind-sigla').value.toUpperCase().replace(/\./g,'').replace(/\s+/g,''), n = $('sind-nombre').value.trim().toUpperCase();
+  if (!s || !n) return; SIND_DICT[s] = n; await kbSet('sindicatos', SIND_DICT);
+  $('sind-sigla').value = ''; $('sind-nombre').value = ''; renderSindList();
+};
+function renderBlacklist() {
+  $('blacklist-list').innerHTML = BLACKLIST.map((e,i) => `<div class="flex items-center justify-between bg-red-50 border border-red-200 rounded px-3 py-1 text-sm"><span class="mono text-red-900">${e}</span><button class="text-red-600" data-i="${i}">Quitar</button></div>`).join('');
+  $('blacklist-list').querySelectorAll('button').forEach(b => b.onclick = async () => { BLACKLIST.splice(+b.dataset.i,1); await kbSet('blacklist_emails', BLACKLIST); renderBlacklist(); });
+}
+$('btn-add-blacklist').onclick = async () => {
+  const v = $('blacklist-new').value.trim().toLowerCase(); if (!v) return;
+  if (!BLACKLIST.includes(v)) BLACKLIST.push(v);
+  await kbSet('blacklist_emails', BLACKLIST); $('blacklist-new').value = ''; renderBlacklist();
+};
+
+$('btn-history').onclick = async () => {
+  const items = await kbList('history:');
+  $('history-list').innerHTML = items.length===0 ? '<p class="text-slate-500 text-sm">Sin historial.</p>' : items.slice(0,50).map(it => {
+    const v = it.value || {}, date = new Date(it.updated_at).toLocaleString('es-AR');
+    return `<div class="border rounded p-3 text-sm hover:bg-slate-50 cursor-pointer" data-key="${it.key}"><div class="flex justify-between"><div><div class="mono font-bold text-indigo-700">${v.data?.ex||'—'}</div><div class="text-slate-600">${SCENARIOS[v.scenario]||v.scenario}</div><div class="text-xs text-slate-400">${v.data?.sigla||''} - ${(v.data?.empresas||[]).join(', ')}</div></div><span class="text-xs text-slate-400">${date}</span></div></div>`;
+  }).join('');
+  $('modal-history').classList.remove('hidden');
+  $('history-list').querySelectorAll('[data-key]').forEach(el => el.onclick = async () => {
+    const rec = await kbGet(el.dataset.key); if (!rec) return;
+    state.data = rec.data; state.emails_sind = rec.emails_sind||[]; state.emails_emp = rec.emails_emp||[];
+    state.notification = rec.notification || state.notification;
+    renderForm(); renderEmailChips(); renderOutput();
+    ['section-data','section-emails','section-output'].forEach(s => $(s).classList.remove('hidden'));
+    $('modal-history').classList.add('hidden');
+  });
+};
+document.querySelectorAll('.modal-close').forEach(b => b.onclick = () => { $('modal-config').classList.add('hidden'); $('modal-history').classList.add('hidden'); });
+
+(async function init() {
+  populateScenarios();
+  const sb = $('sb-status');
+  try {
+    const [s, bl] = await Promise.all([kbGet('sindicatos'), kbGet('blacklist_emails')]);
+    if (s) SIND_DICT = { ...SIND_SEED, ...s }; else await kbSet('sindicatos', SIND_DICT);
+    if (bl) BLACKLIST = bl; else await kbSet('blacklist_emails', BLACKLIST);
+    sb.textContent = '● conectado'; sb.className = 'pill bg-emerald-100 text-emerald-800';
+  } catch {
+    sb.textContent = '● offline'; sb.className = 'pill bg-red-100 text-red-800';
+  }
+})();
+</script>
+</body>
+</html>
